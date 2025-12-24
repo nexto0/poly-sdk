@@ -517,7 +517,7 @@ const limiter = new RateLimiter({
 
 ## License
 
-Private
+MIT
 
 ## Changelog
 

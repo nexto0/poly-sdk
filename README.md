@@ -1081,4 +1081,4 @@ pnpm example:trading
 
 ## License
 
-Private
+MIT
