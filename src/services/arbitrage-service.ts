@@ -75,6 +75,12 @@ export interface ArbitrageServiceConfig {
   imbalanceThreshold?: number;
   /** Rebalance check interval in ms (default: 10000) */
   rebalanceInterval?: number;
+  /** Minimum cooldown between rebalance actions in ms (default: 30000) */
+  rebalanceCooldown?: number;
+  /** Size safety factor 0-1 (default: 0.8) - use only 80% of orderbook depth to prevent partial fills */
+  sizeSafetyFactor?: number;
+  /** Auto-fix imbalance after failed execution (default: true) */
+  autoFixImbalance?: boolean;
 }
 
 export interface RebalanceAction {
@@ -201,6 +207,7 @@ export class ArbitrageService extends EventEmitter {
 
   private isExecuting = false;
   private lastExecutionTime = 0;
+  private lastRebalanceTime = 0;
   private balanceUpdateInterval: ReturnType<typeof setInterval> | null = null;
   private rebalanceInterval: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
@@ -235,6 +242,10 @@ export class ArbitrageService extends EventEmitter {
       targetUsdcRatio: config.targetUsdcRatio ?? 0.5,
       imbalanceThreshold: config.imbalanceThreshold ?? 5,
       rebalanceIntervalMs: config.rebalanceInterval ?? 10000,
+      rebalanceCooldown: config.rebalanceCooldown ?? 30000,
+      // Execution safety
+      sizeSafetyFactor: config.sizeSafetyFactor ?? 0.8,
+      autoFixImbalance: config.autoFixImbalance ?? true,
     };
 
     this.rateLimiter = new RateLimiter();
@@ -390,15 +401,17 @@ export class ArbitrageService extends EventEmitter {
     const shortRevenue = effective.effectiveSellYes + effective.effectiveSellNo;
     const shortProfit = shortRevenue - 1;
 
-    // Calculate sizes
-    const orderbookLongSize = Math.min(yesAsks[0]?.size || 0, noAsks[0]?.size || 0);
-    const orderbookShortSize = Math.min(yesBids[0]?.size || 0, noBids[0]?.size || 0);
+    // Calculate sizes with safety factor to prevent partial fills
+    // Use min of both sides * safety factor to ensure both orders can fill
+    const safetyFactor = this.config.sizeSafetyFactor;
+    const orderbookLongSize = Math.min(yesAsks[0]?.size || 0, noAsks[0]?.size || 0) * safetyFactor;
+    const orderbookShortSize = Math.min(yesBids[0]?.size || 0, noBids[0]?.size || 0) * safetyFactor;
     const heldPairs = Math.min(this.balance.yesTokens, this.balance.noTokens);
     const balanceLongSize = longCost > 0 ? this.balance.usdc / longCost : 0;
 
     // Check long arb
     if (longProfit > this.config.profitThreshold) {
-      const maxSize = Math.min(orderbookLongSize, balanceLongSize, this.config.maxTradeSize);
+      const maxSize = Math.min(orderbookLongSize, balanceLongSize * safetyFactor, this.config.maxTradeSize);
       if (maxSize >= this.config.minTradeSize) {
         return {
           type: 'long',
@@ -832,11 +845,65 @@ export class ArbitrageService extends EventEmitter {
   private async checkAndRebalance(): Promise<void> {
     if (!this.isRunning || this.isExecuting) return;
 
+    // Check cooldown
+    const timeSinceLastRebalance = Date.now() - this.lastRebalanceTime;
+    if (timeSinceLastRebalance < this.config.rebalanceCooldown) {
+      return;
+    }
+
     await this.updateBalance();
     const action = this.calculateRebalanceAction();
 
     if (action.type !== 'none' && action.amount >= this.config.minTradeSize) {
       await this.rebalance(action);
+      this.lastRebalanceTime = Date.now();
+    }
+  }
+
+  /**
+   * Fix YES/NO imbalance immediately after partial execution
+   * This is critical when one side of a parallel order fails
+   */
+  private async fixImbalanceIfNeeded(): Promise<void> {
+    if (!this.config.autoFixImbalance || !this.ctf || !this.tradingClient || !this.market) return;
+
+    await this.updateBalance();
+    const imbalance = this.balance.yesTokens - this.balance.noTokens;
+
+    if (Math.abs(imbalance) <= this.config.imbalanceThreshold) return;
+
+    this.log(`\n⚠️ Imbalance detected after execution: ${imbalance > 0 ? 'YES' : 'NO'} excess = ${Math.abs(imbalance).toFixed(2)}`);
+
+    // Sell the excess tokens to restore balance
+    const sellAmount = Math.floor(Math.abs(imbalance) * 0.9 * 1e6) / 1e6; // Sell 90% to be safe
+    if (sellAmount < this.config.minTradeSize) return;
+
+    try {
+      if (imbalance > 0) {
+        // Sell excess YES
+        const result = await this.tradingClient.createMarketOrder({
+          tokenId: this.market.yesTokenId,
+          side: 'SELL',
+          amount: sellAmount,
+          orderType: 'FOK',
+        });
+        if (result.success) {
+          this.log(`   ✅ Sold ${sellAmount.toFixed(2)} excess YES to restore balance`);
+        }
+      } else {
+        // Sell excess NO
+        const result = await this.tradingClient.createMarketOrder({
+          tokenId: this.market.noTokenId,
+          side: 'SELL',
+          amount: sellAmount,
+          orderType: 'FOK',
+        });
+        if (result.success) {
+          this.log(`   ✅ Sold ${sellAmount.toFixed(2)} excess NO to restore balance`);
+        }
+      }
+    } catch (error: any) {
+      this.log(`   ❌ Failed to fix imbalance: ${error.message}`);
     }
   }
 
@@ -910,7 +977,13 @@ export class ArbitrageService extends EventEmitter {
       const outcomes = this.market!.outcomes || ['YES', 'NO'];
       this.log(`     ${outcomes[0]}: ${buyYesResult.success ? '✓' : '✗'}, ${outcomes[1]}: ${buyNoResult.success ? '✓' : '✗'}`);
 
+      // If one succeeded and the other failed, we have an imbalance - fix it
       if (!buyYesResult.success || !buyNoResult.success) {
+        // Check if partial execution created imbalance
+        if (buyYesResult.success !== buyNoResult.success) {
+          this.log(`  ⚠️ Partial execution detected - attempting to fix imbalance...`);
+          await this.fixImbalanceIfNeeded();
+        }
         return {
           success: false,
           type: 'long',
@@ -1033,7 +1106,15 @@ export class ArbitrageService extends EventEmitter {
       const outcomes = this.market!.outcomes || ['YES', 'NO'];
       this.log(`     ${outcomes[0]}: ${sellYesResult.success ? '✓' : '✗'}, ${outcomes[1]}: ${sellNoResult.success ? '✓' : '✗'}`);
 
+      // If one succeeded and the other failed, we have an imbalance
       if (!sellYesResult.success || !sellNoResult.success) {
+        // Check if partial execution created imbalance
+        if (sellYesResult.success !== sellNoResult.success) {
+          this.log(`  ⚠️ Partial execution detected - imbalance created`);
+          // Note: For short arb, we just sold one side, creating imbalance
+          // The rebalancer will fix this on next cycle
+          await this.fixImbalanceIfNeeded();
+        }
         return {
           success: false,
           type: 'short',

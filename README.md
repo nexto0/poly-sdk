@@ -714,6 +714,11 @@ Automated arbitrage monitoring using WebSocket for real-time orderbook updates, 
 │     - 保持 USDC 在设定范围内 (默认 20%-80%)                                     │
 │     - ⚠️ 关键: 保持 YES = NO (风险控制，避免方向性敞口)                          │
 │     - 自动 Split/Merge 调整仓位                                               │
+│     - Cooldown 机制防止过于频繁 (默认 30s)                                      │
+│                                                                             │
+│  ⚠️ 并行下单安全机制                                                          │
+│     - sizeSafetyFactor: 只用 80% 盘口深度，防止部分成交                          │
+│     - autoFixImbalance: 一边成功一边失败时，自动卖出多余代币                      │
 │                                                                             │
 │  3. 仓位清算 (Settle)                                                         │
 │     - 批量查看多市场持仓                                                       │
@@ -831,12 +836,19 @@ const arbService = new ArbitrageService({
   minTradeSize: 5,         // $5 minimum
   maxTradeSize: 100,       // $100 maximum
   autoExecute: true,       // Automatically execute opportunities
+
   // Rebalancer config
   enableRebalancer: true,  // Auto-rebalance position
   minUsdcRatio: 0.2,       // Min 20% USDC (Split if below)
   maxUsdcRatio: 0.8,       // Max 80% USDC (Merge if above)
   targetUsdcRatio: 0.5,    // Target 50% when rebalancing
   imbalanceThreshold: 5,   // Max YES-NO difference before fix
+  rebalanceInterval: 10000, // Check every 10s
+  rebalanceCooldown: 30000, // Min 30s between actions
+
+  // Execution safety (prevents YES ≠ NO from partial fills)
+  sizeSafetyFactor: 0.8,   // Use 80% of orderbook depth
+  autoFixImbalance: true,  // Auto-sell excess if one side fails
 });
 
 // Listen for events
