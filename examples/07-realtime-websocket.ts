@@ -31,12 +31,14 @@ async function main() {
   // 2. Get market details for token IDs
   console.log('2. Getting market details...');
   const unifiedMarket = await sdk.markets.getMarket(market.conditionId);
-  const yesTokenId = unifiedMarket.tokens.yes.tokenId;
-  const noTokenId = unifiedMarket.tokens.no.tokenId;
+  const yesToken = unifiedMarket.tokens.find(t => t.outcome === 'Yes');
+  const noToken = unifiedMarket.tokens.find(t => t.outcome === 'No');
+  const yesTokenId = yesToken?.tokenId || '';
+  const noTokenId = noToken?.tokenId || '';
   console.log(`   YES Token: ${yesTokenId.slice(0, 20)}...`);
   console.log(`   NO Token: ${noTokenId.slice(0, 20)}...`);
-  console.log(`   Current YES Price: ${unifiedMarket.tokens.yes.price}`);
-  console.log(`   Current NO Price: ${unifiedMarket.tokens.no.price}\n`);
+  console.log(`   Current YES Price: ${yesToken?.price}`);
+  console.log(`   Current NO Price: ${noToken?.price}\n`);
 
   if (!yesTokenId || !noTokenId) {
     console.log('No token IDs available for this market');

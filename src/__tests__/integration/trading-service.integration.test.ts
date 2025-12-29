@@ -25,22 +25,28 @@ describe('TradingService Integration', () => {
     // Initialize the service
     await service.initialize();
 
-    // Find a liquid market for testing
+    // Find a liquid market for testing via Gamma API
     const response = await fetch(
-      'https://clob.polymarket.com/markets?limit=1'
+      'https://gamma-api.polymarket.com/markets?active=true&limit=1&order=volume24hr&ascending=false'
     );
-    const result = await response.json() as { data: Array<{ tokens: Array<{ token_id: string; outcome: string }> }> };
+    const markets = (await response.json()) as Array<{
+      conditionId: string;
+      clobTokenIds: string;
+    }>;
 
-    if (result.data.length === 0) {
+    if (markets.length === 0) {
       throw new Error('No markets found for testing');
     }
 
-    const yesToken = result.data[0].tokens.find((t: { outcome: string }) => t.outcome === 'Yes');
-    if (!yesToken) {
-      throw new Error('No YES token found');
+    // Parse clobTokenIds (Gamma API returns it as JSON string)
+    const clobTokenIds = JSON.parse(markets[0].clobTokenIds) as string[];
+
+    if (!clobTokenIds || clobTokenIds.length === 0) {
+      throw new Error('No token IDs found in market');
     }
 
-    testYesTokenId = yesToken.token_id;
+    // First token is typically the YES token
+    testYesTokenId = clobTokenIds[0];
   }, 60000);
 
   describe('getTickSize', () => {

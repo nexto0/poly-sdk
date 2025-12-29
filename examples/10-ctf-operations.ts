@@ -242,16 +242,16 @@ async function main() {
 
   console.log(`
    // Assuming long arbitrage opportunity exists
-   // 1. Buy YES tokens via TradingClient
-   const yesOrder = await tradingClient.createMarketOrder({
+   // 1. Buy YES tokens via TradingService
+   const yesOrder = await tradingService.createMarketOrder({
      tokenId: yesTokenId,
      side: 'BUY',
      amount: 100, // $100 USDC
      orderType: 'FOK',
    });
 
-   // 2. Buy NO tokens via TradingClient
-   const noOrder = await tradingClient.createMarketOrder({
+   // 2. Buy NO tokens via TradingService
+   const noOrder = await tradingService.createMarketOrder({
      tokenId: noTokenId,
      side: 'BUY',
      amount: 100, // $100 USDC
