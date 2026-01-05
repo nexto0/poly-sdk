@@ -263,6 +263,10 @@ export interface TradesParams {
   filterAmount?: number;
   /** Trade side filter */
   side?: 'BUY' | 'SELL';
+  /** Start timestamp (Unix milliseconds) - filter trades after this time */
+  startTimestamp?: number;
+  /** End timestamp (Unix milliseconds) - filter trades before this time */
+  endTimestamp?: number;
 }
 
 /**
@@ -593,7 +597,11 @@ export class DataApiClient {
   async getTrades(params?: TradesParams): Promise<Trade[]> {
     return this.rateLimiter.execute(ApiType.DATA_API, async () => {
       const query = new URLSearchParams();
-      query.set('limit', String(params?.limit ?? 500));
+      // Request more if we need to filter by time (to ensure we get enough after filtering)
+      const requestLimit = (params?.startTimestamp || params?.endTimestamp)
+        ? Math.min((params?.limit ?? 500) * 3, 1000)
+        : (params?.limit ?? 500);
+      query.set('limit', String(requestLimit));
 
       // Basic filters
       if (params?.market) query.set('market', params.market);
@@ -614,7 +622,22 @@ export class DataApiClient {
           await response.json().catch(() => null)
         );
       const data = (await response.json()) as unknown[];
-      return this.normalizeTrades(data);
+      let trades = this.normalizeTrades(data);
+
+      // Apply timestamp filters client-side (API may not support these directly)
+      if (params?.startTimestamp) {
+        trades = trades.filter(t => t.timestamp >= params.startTimestamp!);
+      }
+      if (params?.endTimestamp) {
+        trades = trades.filter(t => t.timestamp <= params.endTimestamp!);
+      }
+
+      // Apply limit after filtering
+      if (params?.limit && trades.length > params.limit) {
+        trades = trades.slice(0, params.limit);
+      }
+
+      return trades;
     });
   }
 

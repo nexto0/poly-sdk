@@ -122,7 +122,9 @@ export interface PolySDKOptions {
 }
 
 // K-Line interval types
-export type KLineInterval = '30s' | '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '12h' | '1d';
+// Short intervals (1s, 5s, 15s) for 15-minute crypto markets
+// Standard intervals (30s, 1m, 5m, 15m, 30m, 1h, 4h, 12h, 1d) for general use
+export type KLineInterval = '1s' | '5s' | '15s' | '30s' | '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '12h' | '1d';
 
 // K-Line candle data
 export interface KLineCandle {
@@ -501,6 +503,9 @@ export function getBinaryTokens(tokens: MarketToken[]): BinaryTokens | null {
 // Helper to convert interval to milliseconds
 export function getIntervalMs(interval: KLineInterval): number {
   const map: Record<KLineInterval, number> = {
+    '1s': 1 * 1000,
+    '5s': 5 * 1000,
+    '15s': 15 * 1000,
     '30s': 30 * 1000,
     '1m': 60 * 1000,
     '5m': 5 * 60 * 1000,
@@ -512,4 +517,75 @@ export function getIntervalMs(interval: KLineInterval): number {
     '1d': 24 * 60 * 60 * 1000,
   };
   return map[interval];
+}
+
+// ===== Token vs Underlying Correlation Types =====
+
+/**
+ * Supported underlying assets for correlation analysis
+ */
+export type UnderlyingAsset = 'BTC' | 'ETH' | 'SOL';
+
+/**
+ * Single data point for token vs underlying correlation
+ */
+export interface TokenUnderlyingDataPoint {
+  /** Timestamp (Unix ms) */
+  timestamp: number;
+  /** Primary token price (Up/Yes) from Polymarket trades */
+  upPrice?: number;
+  /** Secondary token price (Down/No) from Polymarket trades */
+  downPrice?: number;
+  /** Sum of token prices (should be close to 1.0) */
+  priceSum?: number;
+  /** Underlying asset price from Binance */
+  underlyingPrice: number;
+  /** Percentage change from first candle */
+  underlyingChange: number;
+}
+
+/**
+ * Correlation coefficients between token prices and underlying asset
+ */
+export interface TokenUnderlyingCorrelationCoefficients {
+  /** Pearson correlation: Up token price vs underlying price */
+  upVsUnderlying: number;
+  /** Pearson correlation: Down token price vs underlying price */
+  downVsUnderlying: number;
+}
+
+/**
+ * Result of token vs underlying correlation analysis
+ *
+ * Aligns K-line data from Polymarket tokens (Up/Down) with underlying
+ * asset prices from Binance (BTC/ETH/SOL) for correlation analysis.
+ *
+ * Use cases:
+ * - Analyze how well prediction market tokens track underlying prices
+ * - Identify divergences between token and underlying prices
+ * - Backtest trading strategies based on correlation patterns
+ *
+ * @example
+ * ```typescript
+ * const correlation = await sdk.markets.getTokenUnderlyingData(
+ *   '0x123...', // BTC prediction market
+ *   'BTC',
+ *   '1h',
+ *   { calculateCorrelation: true }
+ * );
+ *
+ * console.log(`Up token vs BTC correlation: ${correlation.correlation?.upVsUnderlying}`);
+ * ```
+ */
+export interface TokenUnderlyingCorrelation {
+  /** Market condition ID */
+  conditionId: string;
+  /** Underlying asset (BTC, ETH, SOL) */
+  underlying: UnderlyingAsset;
+  /** K-line interval */
+  interval: KLineInterval;
+  /** Aligned data points */
+  data: TokenUnderlyingDataPoint[];
+  /** Correlation coefficients (if calculated) */
+  correlation?: TokenUnderlyingCorrelationCoefficients;
 }

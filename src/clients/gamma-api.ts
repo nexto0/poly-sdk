@@ -263,6 +263,12 @@ export interface MarketSearchParams {
    * Sort direction (true = ascending, false = descending)
    */
   ascending?: boolean;
+
+  /**
+   * Filter by tag (e.g., "15-min", "5-min", "hourly", "daily")
+   * Used for recurring short-term markets
+   */
+  tag?: string;
 }
 
 // ===== Client =====
@@ -346,6 +352,7 @@ export class GammaApiClient {
     if (params?.order) query.set('order', params.order);
     if (params?.ascending !== undefined)
       query.set('ascending', String(params.ascending));
+    if (params?.tag) query.set('tag', params.tag);
 
     return this.rateLimiter.execute(ApiType.GAMMA_API, async () => {
       const response = await fetch(`${GAMMA_API_BASE}/markets?${query}`);

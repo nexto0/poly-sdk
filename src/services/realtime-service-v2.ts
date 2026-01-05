@@ -259,6 +259,9 @@ export class RealtimeServiceV2 extends EventEmitter {
   private subscriptionIdCounter = 0;
   private connected = false;
 
+  // Store subscription messages for reconnection
+  private subscriptionMessages: Map<string, { subscriptions: Array<{ topic: string; type: string; filters?: string; clob_auth?: ClobApiKeyCreds }> }> = new Map();
+
   // Caches
   private priceCache: Map<string, PriceUpdate> = new Map();
   private bookCache: Map<string, OrderbookSnapshot> = new Map();
@@ -307,6 +310,7 @@ export class RealtimeServiceV2 extends EventEmitter {
       this.client = null;
       this.connected = false;
       this.subscriptions.clear();
+      this.subscriptionMessages.clear();  // Clear reconnection list
     }
   }
 
@@ -338,7 +342,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       { topic: 'clob_market', type: 'tick_size_change', filters: filterStr },
     ];
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);  // Store for reconnection
 
     // Register handlers
     const orderbookHandler = (book: OrderbookSnapshot) => {
@@ -382,6 +388,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('tickSizeChange', tickSizeHandler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);  // Remove from reconnection list
       },
     };
 
@@ -664,7 +671,9 @@ export class RealtimeServiceV2 extends EventEmitter {
       filters: JSON.stringify({ symbol }),
     }));
 
-    this.sendSubscription({ subscriptions });
+    const subMsg = { subscriptions };
+    this.sendSubscription(subMsg);
+    this.subscriptionMessages.set(subId, subMsg);  // Store for reconnection
 
     const handler = (price: CryptoPrice) => {
       if (symbols.includes(price.symbol)) {
@@ -681,6 +690,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         this.off('cryptoChainlinkPrice', handler);
         this.sendUnsubscription({ subscriptions });
         this.subscriptions.delete(subId);
+        this.subscriptionMessages.delete(subId);  // Remove from reconnection list
       },
     };
 
@@ -880,6 +890,7 @@ export class RealtimeServiceV2 extends EventEmitter {
       sub.unsubscribe();
     }
     this.subscriptions.clear();
+    this.subscriptionMessages.clear();  // Clear reconnection list
   }
 
   // ============================================================================
@@ -889,6 +900,16 @@ export class RealtimeServiceV2 extends EventEmitter {
   private handleConnect(client: RealTimeDataClient): void {
     this.connected = true;
     this.log('Connected to WebSocket server');
+
+    // Re-subscribe to all active subscriptions on reconnect
+    if (this.subscriptionMessages.size > 0) {
+      this.log(`Re-subscribing to ${this.subscriptionMessages.size} subscriptions...`);
+      for (const [subId, msg] of this.subscriptionMessages) {
+        this.log(`Re-subscribing: ${subId}`);
+        this.client?.subscribe(msg);
+      }
+    }
+
     this.emit('connected');
   }
 
